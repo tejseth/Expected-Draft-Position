@@ -8,6 +8,8 @@ library(broom)
 library(igraph)
 library(tidyverse)
 library(ggrepel)
+library(gt)
+library(ggbeeswarm)
 
 theme_tej <- function() {
   theme_bw() +
@@ -22,9 +24,10 @@ theme_tej <- function() {
 
 X <- wr_metrics2 %>% 
   mutate(broken_tackle_rate = broken_tackles / total_rec,
-         td_rate = total_tds / total_targets) %>%
+         td_rate = total_tds / total_targets,
+         yac_perc = total_yac / total_yards) %>%
   dplyr::select(seasons, comp_perc, yards_per_target, yards_per_rec, first_down_perc,
-                td_rate, fourty_time, vertical, height, weight, drop_rate, yards_per_game) %>%
+                td_rate, fourty_time, vertical, height, weight, drop_rate, yards_per_game, yac_perc) %>%
   scale()
 
 set.seed(222)
@@ -57,11 +60,11 @@ km_centers$Cluster <- c('Cluster 1', 'Cluster 2', 'Cluster 3',
 
 
 km_centers <- km_centers %>%
-  rename(c('S'='seasons', 'CP'='comp_perc', # give predictors a shorter name for plotting
+  rename(c('EXP'='seasons', 'CP'='comp_perc', # give predictors a shorter name for plotting
            'YPT'='yards_per_target', 'YPR'='yards_per_rec',
            'FDP'='first_down_perc', 'TD'='td_rate',
-           '40'='fourty_time', 'VT'='vertical', 'H'='height',
-           'W'='weight', 'DR'='drop_rate', 'YPG'='yards_per_game')) %>%
+           '40'='fourty_time', 'VT'='vertical', 'HT'='height',
+           'WGT'='weight', 'DR'='drop_rate', 'YPG'='yards_per_game', "YAC" = 'yac_perc')) %>%
   pivot_longer(!Cluster, names_to = 'feature', values_to = 'z_val') # pivot data to make plotting easier
 
 km_centers$Cluster <- factor(km_centers$Cluster, levels=c('Cluster 1', 'Cluster 2', 'Cluster 3', 'Cluster 4',
@@ -79,9 +82,10 @@ km_centers %>%
        title = "Visualizing K-Means Cluster Makeups for Receivers in the NFL Draft",
        caption = 'By Tej Seth | @mfbanalytics | @_AlexStern') + 
   theme_minimal() + theme_tej() + 
-  theme(legend.position = "none", strip.text = element_text(face='bold'),
-        axis.text.x = element_text(angle=90, size=8), # alter axis text
-        panel.grid.minor = element_blank())
+  theme(legend.position = "none", strip.text = element_text(face='bold', size = 15),
+        axis.text.x = element_text(angle=90, size=12), # alter axis text
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(color="black", fill="#add8e6", size=1.5, linetype="solid"))
 ggsave('wr_clusters_1.png', width = 14, height = 10, dpi = "retina")
 
 wr_metrics2 <- wr_metrics2 %>%
@@ -106,11 +110,11 @@ wr_metrics2$cluster <- as.factor(wr_metrics2$cluster)
 wr_metrics2 <- wr_metrics2 %>%
   left_join(pc2, by = c("id" = "id"))
 
-wr_metrics2 %>% 
+p <- wr_metrics2 %>% 
   filter(round == 1 | round == 2 | round == 1000) %>%
   ggplot(aes(x=PC1, y=PC2, color=cluster, shape=cluster)) + 
   geom_point(alpha=0.3) + 
-  geom_text_repel(aes(label = player), label.padding = 0.35) +
+  geom_text_repel(aes(label = player)) +
   scale_color_brewer(palette="Dark2") +
   geom_rug() + # great way to visualize points on a single axis
   theme_minimal() + stat_ellipse(level=(2/3)) + # set ellipse value to one standard deviation
@@ -121,10 +125,85 @@ wr_metrics2 %>%
        subtitle = 'Receivers drafted in the 1st or 2nd round since 2016 and all draft elgible receivers this year',
        caption = 'By Tej Seth | @mfbanalytics | @_AlexStern') + 
   theme_tej() +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
-  scale_x_continuous(breaks = scales::pretty_breaks(n = 10))
+  theme(legend.position = "right") 
+p + coord_cartesian(xlim = c(-4.2, 6), ylim = c(-4.5, 3.5))
 ggsave('wr_clusters_2.png', width = 14, height = 10, dpi = "retina")
 
+cluster_stats_drafted <- wr_metrics2 %>%
+  filter(round != 1000) %>%
+  group_by(cluster) %>%
+  summarize(total_epa_avg = mean(total_epa),
+            epa_per_rec_avg = mean(epa_per_rec),
+            avg_fourty = mean(fourty_time),
+            avg_height = mean(height),
+            avg_weight = mean(weight),
+            avg_round = mean(round),
+            avg_pick = mean(pick))
+
+cluster_stats_drafted <- cluster_stats_drafted %>%
+  mutate_if(is.numeric, ~round(., 2)) %>%
+  arrange(avg_pick)
+
+write.csv(cluster_stats_drafted, 'cluster_stats_drafted.csv')
+
+tab_data <- read.csv("~/Draft Pos/cluster_stats_drafted.csv", comment.char="#")
+
+cluster_gt <- tab_data %>% 
+  gt() %>% 
+  text_transform(
+    locations = cells_body(vars(highest_headshot, proj_headshot)),
+    fn = function(x){
+      web_image(
+        url = x,
+        height = px(35)
+      )
+    }
+  ) %>% 
+  cols_label(
+    cluster = "Cluster",
+    highest_drafted_player = "Example Player",
+    highest_headshot = "",
+    proj_player = "Draft Player",
+    proj_headshot = "",
+    total_epa_avg = "Avg. Total EPA",
+    epa_per_rec_avg = "EPA Per Rec.",
+    avg_fourty = "Avg. 40",
+    avg_round = "Avg. Round",
+    avg_pick = "Avg. Pick") %>%
+  data_color(
+    columns = vars(avg_pick),
+    colors = scales::col_numeric(
+      palette = c("#7fbf7b", "#f7f7f7", "#af8dc3"),
+      domain = c(75, 150)
+    )
+  ) %>% 
+  tab_header(
+    title = "NFL Draft Wide Receiver Cluster Breakdown"
+  ) %>%
+  tab_options(
+    column_labels.background.color = "white",
+    column_labels.font.weight = "bold",
+    table.border.top.width = px(3),
+    table.border.top.color = "transparent",
+    table.border.bottom.color = "transparent",
+    table.border.bottom.width = px(3),
+    column_labels.border.top.width = px(3),
+    column_labels.border.top.color = "transparent",
+    column_labels.border.bottom.width = px(3),
+    column_labels.border.bottom.color = "black",
+    data_row.padding = px(3),
+    source_notes.font.size = 12,
+    table.font.size = 16,
+    heading.align = "middle",
+    heading.title.font.size = 22
+  ) %>%
+  opt_table_font(
+    font = list(
+      default_fonts()
+    )
+  ) 
+
+gtsave(cluster_gt, "wr_clusters_3.png")
 
 
 
